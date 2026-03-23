@@ -1,9 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const db = require('../db');
-const MatchmakerService = require('../services/MatchmakerService');
 
-const maker = new MatchmakerService();
+const maker = require('../services/MatchmakerService');
 
 /**
  * Helper: แปลง longtext player_ids เป็น Array
@@ -100,10 +99,13 @@ router.post('/', async (req, res) => {
     }
 });
 
-// [PATCH] /api/matches/:id (update) - จบแมตช์
 router.patch('/:id', async (req, res) => {
     const { id } = req.params;
-    const { round, court_id, player_ids } = req.body;
+    const { round, court_id, player_ids } = req.body; // player_ids: [p1, p2, p3, p4]
+
+    if (!player_ids || player_ids.length !== 4) {
+        return res.status(400).json({ error: "Invalid player count" });
+    }
 
     const connection = await db.getConnection();
     try {
@@ -115,27 +117,70 @@ router.patch('/:id', async (req, res) => {
             [id]
         );
 
-        // 2. อัปเดต last_played_round ของผู้เล่น
+        // 2. อัปเดตข้อมูลผู้เล่น (Matches + 1 และ Round ล่าสุด)
         const placeholders = player_ids.map(() => '?').join(',');
         await connection.execute(
-            `UPDATE players SET last_played_round = ? WHERE id IN (${placeholders})`,
+            `UPDATE players 
+             SET matches = matches + 1, 
+                 last_played_round = ? 
+             WHERE id IN (${placeholders})`,
             [round, ...player_ids]
         );
 
-        // 3. ปล่อยสนาม
+        // 3. บันทึก Teammates (คู่ใครคู่มัน)
+        // สมมติโครงสร้าง: [0,1] เป็นทีม A, [2,3] เป็นทีม B
+        const pairs = [
+            [player_ids[0], player_ids[1]],
+            [player_ids[1], player_ids[0]],
+            [player_ids[2], player_ids[3]],
+            [player_ids[3], player_ids[2]]
+        ];
+
+        for (const [p1, p2] of pairs) {
+            // ใช้ JSON_SET เพื่ออัปเดตค่าใน JSON column (MySQL 5.7+)
+            // ถ้ายังไม่มี key นั้นให้เริ่มที่ 1 ถ้ามีแล้วให้ +1
+            await connection.execute(
+                `UPDATE players 
+                 SET teammates = JSON_SET(
+                    COALESCE(teammates, '{}'), 
+                    '$.\"${p2}\"', 
+                    COALESCE(JSON_EXTRACT(teammates, '$.\"${p2}\"'), 0) + 1
+                 ) 
+                 WHERE id = ?`,
+                [p1]
+            );
+        }
+
+        // 4. ปล่อยสนาม
         await connection.execute(
-            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1, match_id = 0 WHERE id = ?",
+            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1, match_id = NULL WHERE id = ?",
             [court_id]
         );
 
         await connection.commit();
 
-        const newQueue = await maker.generate({ next_show: 10 });
-        const [allPlayers] = await connection.execute("SELECT * FROM players");
+        // --- ส่วนนอก Transaction (เพื่อความเร็ว) ---
+        let newQueue = [];
+        try {
+            newQueue = await maker.generate({ next_show: 10 });
+        } catch (e) {
+            console.error("Matchmaker failed:", e);
+        }
 
-        res.json({ success: true, newQueue, players: allPlayers });
+        const [allPlayers] = await connection.execute("SELECT * FROM players WHERE play_status != 'stopped'");
+
+        res.json({ 
+            success: true, 
+            newQueue, 
+            players: allPlayers.map(p => ({
+                ...p,
+                teammates: typeof p.teammates === 'string' ? JSON.parse(p.teammates) : p.teammates
+            })) 
+        });
+
     } catch (err) {
         await connection.rollback();
+        console.error("PATCH Match Error:", err);
         res.status(500).json({ error: err.message });
     } finally {
         connection.release();
