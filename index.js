@@ -4,8 +4,8 @@ const cors = require("cors");
 
 const playersRoutes = require("./routes/players");
 const courtsRoutes = require("./routes/courts");
-//matches
 const matchesRoutes = require("./routes/matches");
+const resetRouter = require('./routes/reset');
 
 const app = express();
 
@@ -17,6 +17,7 @@ app.use(express.json());
 app.use("/api/players", playersRoutes);
 app.use("/api/courts", courtsRoutes);
 app.use("/api/matches", matchesRoutes);
+app.use('/api/reset', resetRouter);
 
 // 404 handler
 app.use((req, res) => {

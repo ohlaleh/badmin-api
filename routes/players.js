@@ -1,91 +1,133 @@
-// routes/players.js
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const db = require("../db");
+const db = require('../db'); // ไฟล์เชื่อมต่อ TiDB/MySQL (pool.promise())
 
-/* GET all players */
-router.get("/", async (req, res) => {
-  try {
-    const [rows] = await db.execute(
-      "SELECT * FROM players"
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+/**
+ * Helper: สำหรับจัดการฟิลด์ longtext (JSON string) ให้เป็น Array
+ * เพื่อเลียนแบบ $casts ใน Laravel
+ */
+const castPlayer = (player) => {
+    if (!player) return null;
+    let teammates = [];
+    try {
+        // ถ้าใน DB เป็น string ให้ parse, ถ้าว่างให้เป็น []
+        teammates = typeof player.teammates === 'string' 
+            ? JSON.parse(player.teammates) 
+            : (player.teammates || []);
+    } catch (e) {
+        teammates = [];
+    }
+    
+    return {
+        ...player,
+        teammates: teammates
+    };
+};
+
+// 1. [GET] /api/players (index)
+// ดึงรายชื่อผู้เล่นทั้งหมด เรียงตามจำนวนแมตช์ที่เล่น (น้อยไปมาก)
+router.get('/', async (req, res) => {
+    try {
+        const [rows] = await db.execute("SELECT * FROM players ORDER BY matches ASC");
+        const players = rows.map(castPlayer);
+        res.json({ players });
+    } catch (err) {
+        console.error('Get players error:', err);
+        res.status(500).json({ error: 'Server error', message: err.message });
+    }
 });
 
-/* GET single Player */
-router.get("/:id", async (req, res) => {
-  try {
-    const [rows] = await db.execute(
-      "SELECT * FROM players WHERE id = ?",
-      [req.params.id]
-    );
+// 2. [POST] /api/players (store)
+// สร้างผู้เล่นใหม่
+router.post('/', async (req, res) => {
+    const { name, level, gender, teammates } = req.body;
 
-    if (rows.length === 0)
-      return res.status(404).json({ error: "Player not found" });
+    // Validation (Laravel: required|string)
+    if (!name) {
+        return res.status(422).json({ message: "The name field is required." });
+    }
 
-    res.json(rows[0]);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    // Validation Level (Laravel: in:N-,N,S,P)
+    const allowedLevels = ['N-', 'N', 'S', 'P', null];
+    if (level && !allowedLevels.includes(level)) {
+        return res.status(422).json({ message: "Invalid level value (N-, N, S, P)." });
+    }
+
+    try {
+        // เตรียมข้อมูลบันทึก (teammates ต้องเป็น String ก่อนลง longtext)
+        const teammatesString = JSON.stringify(teammates || []);
+        
+        const [result] = await db.execute(
+            `INSERT INTO players (name, level, gender, teammates, matches, last_played_round, play_status) 
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [name, level || null, gender || null, teammatesString, 0, -1, 'active']
+        );
+
+        // ดึงข้อมูลที่เพิ่งสร้างกลับมาส่งให้ Frontend
+        const [newRows] = await db.execute("SELECT * FROM players WHERE id = ?", [result.insertId]);
+        res.status(201).json({ player: castPlayer(newRows[0]) });
+    } catch (err) {
+        console.error('Store player error:', err);
+        res.status(500).json({ error: 'Server error', message: err.message });
+    }
 });
 
-/* CREATE Player */
-router.post("/", async (req, res) => {
-  // 1. รับค่าจาก body (ตัด email ออกถ้าไม่ได้ใช้ในตาราง players)
-  const { name, level, gender } = req.body;
+// 3. [PUT] /api/players/:id (update)
+// แก้ไขข้อมูลผู้เล่นทั้งหมด
+router.put('/:id', async (req, res) => {
+    const { id } = req.params;
+    const { name, level, matches, last_played_round, gender, teammates, play_status } = req.body;
 
-  // 2. ตรวจสอบเงื่อนไข (Validation)
-  // เช็กแค่ name เพราะใน SQL ของคุณไม่มีฟิลด์ email
-  if (!name) {
-    return res.status(400).json({ error: "กรุณาระบุชื่อผู้เล่น (Name is required)" });
-  }
+    try {
+        // แปลง teammates เป็น string ก่อนบันทึก
+        const teammatesString = JSON.stringify(teammates || []);
 
-  try {
-    const [result] = await db.execute(
-      "INSERT INTO players (name, level, gender, matches, last_played_round, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())",
-      [
-        name,                // ? 1
-        level || null,       // ? 2
-        gender || null,      // ? 3
-        0,                   // ? 4
-        -1                   // ? 5
-      ]
-    );
+        const [result] = await db.execute(
+            `UPDATE players 
+             SET name = ?, level = ?, matches = ?, last_played_round = ?, gender = ?, teammates = ?, play_status = ?, updated_at = NOW() 
+             WHERE id = ?`,
+            [name, level, matches, last_played_round, gender, teammatesString, play_status, id]
+        );
 
-    // 3. ส่งข้อมูลกลับ (Response)
-    // ส่งเฉพาะข้อมูลที่มีอยู่จริงในตาราง
-    res.status(201).json({ 
-      id: result.insertId, 
-      name, 
-      level: level || null, 
-      gender: gender || null,
-      message: "เพิ่มผู้เล่นสำเร็จ" 
-    });
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Player not found" });
+        }
 
-  } catch (err) {
-    // กรณี Error เช่น ชื่อซ้ำ (ถ้าตั้ง Unique ไว้) หรือ Database เชื่อมต่อไม่ได้
-    res.status(500).json({ error: err.message });
-  }
+        const [updatedRows] = await db.execute("SELECT * FROM players WHERE id = ?", [id]);
+        res.json({ player: castPlayer(updatedRows[0]) });
+    } catch (err) {
+        console.error('Update player error:', err);
+        res.status(500).json({ error: 'Server error', message: err.message });
+    }
 });
 
-/* DELETE Player */
-router.delete("/:id", async (req, res) => {
-  try {
-    const [result] = await db.execute(
-      "DELETE FROM players WHERE id = ?",
-      [req.params.id]
-    );
+// 4. [PATCH] /api/players/:id/play_status (updatePlayStatus)
+// แก้ไขสถานะการเล่นอย่างเดียว (active/stopped)
+router.patch('/:id/play_status', async (req, res) => {
+    const { id } = req.params;
+    const { play_status } = req.body;
 
-    if (result.affectedRows === 0)
-      return res.status(404).json({ error: "Player not found" });
+    // Validation
+    if (!['active', 'stopped'].includes(play_status)) {
+        return res.status(422).json({ message: "Status must be active or stopped." });
+    }
 
-    res.status(204).json({});
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    try {
+        const [result] = await db.execute(
+            "UPDATE players SET play_status = ?, updated_at = NOW() WHERE id = ?",
+            [play_status, id]
+        );
+
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ message: "Player not found" });
+        }
+
+        const [rows] = await db.execute("SELECT * FROM players WHERE id = ?", [id]);
+        res.json({ success: true, player: castPlayer(rows[0]) });
+    } catch (err) {
+        console.error('Patch status error:', err);
+        res.status(500).json({ error: 'Server error', message: err.message });
+    }
 });
 
 module.exports = router;
