@@ -153,7 +153,7 @@ router.patch('/:id', async (req, res) => {
 
         // 4. ปล่อยสนาม
         await connection.execute(
-            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1, match_id = NULL WHERE id = ?",
+            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1, match_id = 0 WHERE id = ?",
             [court_id]
         );
 
@@ -209,7 +209,7 @@ router.delete('/:id', async (req, res) => {
 
         // Free court
         await connection.execute(
-            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1 WHERE id = ?",
+            "UPDATE courts SET status = 'available', current_players = '[]', finished = 1, match_id = 0 WHERE id = ?",
             [match.court_id]
         );
 
