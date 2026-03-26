@@ -117,16 +117,6 @@ router.patch('/:id', async (req, res) => {
             [id]
         );
 
-        // 2. อัปเดตข้อมูลผู้เล่น (Matches + 1 และ Round ล่าสุด)
-        const placeholders = player_ids.map(() => '?').join(',');
-        await connection.execute(
-            `UPDATE players 
-             SET matches = matches + 1, 
-                 last_played_round = ? 
-             WHERE id IN (${placeholders})`,
-            [round, ...player_ids]
-        );
-
         // 3. บันทึก Teammates (คู่ใครคู่มัน)
         // สมมติโครงสร้าง: [0,1] เป็นทีม A, [2,3] เป็นทีม B
         const pairs = [

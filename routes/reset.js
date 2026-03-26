@@ -11,7 +11,7 @@ router.post('/', async (req, res) => {
 
         // 1. รีเซ็ตสถิติผู้เล่น (Matches = 0, Round = -1)
         await connection.execute(
-            "UPDATE players SET matches = 0, last_played_round = -1"
+            "UPDATE players SET matches = 0, last_played_round = -1, teammates = '[]'"
         );
 
         // 2. ล้างข้อมูลสนาม (finished = true, status = available, current_players = [])

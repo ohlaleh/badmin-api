@@ -6,6 +6,7 @@ const playersRoutes = require("./routes/players");
 const courtsRoutes = require("./routes/courts");
 const matchesRoutes = require("./routes/matches");
 const resetRouter = require('./routes/reset');
+const roundRouter = require('./routes/round');
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use("/api/players", playersRoutes);
 app.use("/api/courts", courtsRoutes);
 app.use("/api/matches", matchesRoutes);
 app.use('/api/reset', resetRouter);
+app.use('/api/round', roundRouter);
 
 // 404 handler
 app.use((req, res) => {
